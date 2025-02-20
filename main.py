@@ -1,64 +1,55 @@
-import tensorflow.lite as tflite
-from PIL import Image
+import cv2
+import numpy as np
+import tflite_runtime.interpreter as tflite
+import os
 
-def load_labels(filename):
-    file_dict = {}  
-    with open(filename, "r") as file:
-        for line in file:
-            parts = line.strip().split()  
-            
-            if len(parts) == 2:
-                key = int(parts[0])  
-                value = parts[1]  
-                file_dict[key] = value  
+# Load the model
+MODEL_PATH = "model.tflite"  # Update if your model has a different name
+LABELS_PATH = "labels.txt"
 
-    return file_dict
+# Load labels
+with open(LABELS_PATH, "r") as f:
+    labels = [line.strip() for line in f.readlines()]
 
-filename = "labels.txt" 
-labels = load_labels(filename)
-print(labels)
-
-
-
-# Load TFLite model
-interpreter = tflite.Interpreter(model_path="model.tflite")
+# Load TensorFlow Lite model
+interpreter = tflite.Interpreter(model_path=MODEL_PATH)
 interpreter.allocate_tensors()
 
-# Get input and output tensors
+# Get input and output details
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
-# Load and preprocess image manually (without numpy)
-def preprocess_image(image_path, input_shape):
-    # Open the image and resize it to the input size expected by the model
-    image = Image.open(image_path).resize((input_shape[1], input_shape[2]))
+# Get input shape (assuming model expects 224x224 images)
+input_shape = input_details[0]['shape']
+img_size = (input_shape[1], input_shape[2])  # (height, width)
 
-    # Convert image to a list of pixel values (manual normalization)
-    pixel_values = list(image.getdata())
-    pixel_values = [value / 255.0 for value in pixel_values]  # Normalize to [0, 1]
+# Folder containing test images
+TEST_FOLDER = "test/"
 
-    # Convert to a list of lists (adding batch dimension)
-    image_list = [pixel_values]
-    
-    return image_list
+# Process each image in the test folder
+for img_name in os.listdir(TEST_FOLDER):
+    img_path = os.path.join(TEST_FOLDER, img_name)
 
-# Run inference
-image = preprocess_image("trash85.jpg", input_details[0]['shape'])
-interpreter.set_tensor(input_details[0]['index'], image)
-interpreter.invoke()
+    # Read the image
+    img = cv2.imread(img_path)
+    if img is None:
+        print(f"Skipping {img_name}, could not read the image.")
+        continue
 
-# Get the output tensor and extract the result
-output_data = interpreter.get_tensor(output_details[0]['index'])
+    # Preprocess the image
+    img = cv2.resize(img, img_size)  # Resize to model's expected size
+    img = np.expand_dims(img, axis=0).astype(np.float32) / 255.0  # Normalize
 
-# Get the predicted class manually (without numpy)
-predicted_class = 0
-max_value = output_data[0][0]  # Initialize with the first value
+    # Run inference
+    interpreter.set_tensor(input_details[0]['index'], img)
+    interpreter.invoke()
+    output_data = interpreter.get_tensor(output_details[0]['index'])
 
-for i in range(1, len(output_data[0])):
-    if output_data[0][i] > max_value:
-        max_value = output_data[0][i]
-        predicted_class = i
+    # Get the predicted class
+    predicted_index = np.argmax(output_data)
+    confidence = output_data[0][predicted_index]
 
-# Assuming labels is a list, print the predicted class
-labels = ["plastic", "metal", "paper", "glass", "cardboard"]  # Modify according to your labels
-print(f"Predicted class: {labels[predicted_class]}")
+    # Print results
+    print(f"Image: {img_name} → Prediction: {labels[predicted_index]} (Confidence: {confidence:.2f})")
+
+print("Testing complete!")
